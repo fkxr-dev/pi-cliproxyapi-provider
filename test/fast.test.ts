@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
@@ -24,7 +24,7 @@ const model = {
 
 describe("Codex protocol module resolution", () => {
 	it("finds pi-ai nested beneath pi's bundled Node package", () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-cliproxyapi-codex-resolution-test-"));
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-cliproxyapi-codex-resolution-test-")));
 		const cliEntry = join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
 		const codexModule = join(
 			root,
