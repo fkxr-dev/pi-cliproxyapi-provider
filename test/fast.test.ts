@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, FooterComponent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import {
 	applyFastPayloadHook,
 	type CliproxyCodexStreamSimple,
 	patchCodexSource,
+	resolveCodexModuleFromNodeEntry,
 	withPriorityServiceTier,
 	wrapStreamSimpleForFast,
 } from "../extensions/codex-stream.ts";
@@ -20,6 +21,36 @@ const model = {
 	id: "gpt-5.4",
 	provider: "cliproxyapi",
 } as Model<Api>;
+
+describe("Codex protocol module resolution", () => {
+	it("finds pi-ai nested beneath pi's bundled Node package", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-cliproxyapi-codex-resolution-test-"));
+		const cliEntry = join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
+		const codexModule = join(
+			root,
+			"node_modules",
+			"@earendil-works",
+			"pi-coding-agent",
+			"node_modules",
+			"@earendil-works",
+			"pi-ai",
+			"dist",
+			"api",
+			"openai-codex-responses.js",
+		);
+
+		try {
+			mkdirSync(dirname(cliEntry), { recursive: true });
+			mkdirSync(dirname(codexModule), { recursive: true });
+			writeFileSync(cliEntry, "", "utf8");
+			writeFileSync(codexModule, "", "utf8");
+
+			expect(resolveCodexModuleFromNodeEntry(cliEntry)).toBe(codexModule);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("Codex WebSocket transport patch", () => {
 	it("reconnects WebSocket instead of falling back to SSE", () => {

@@ -13,7 +13,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -202,6 +203,21 @@ export function patchCodexSource(source: string, providerIds: string[]): string 
 	return src;
 }
 
+export function resolveCodexModuleFromNodeEntry(entryPath: string): string | undefined {
+	try {
+		const require = createRequire(pathToFileURL(realpathSync(entryPath)));
+		for (const nodeModulesDir of require.resolve.paths("@earendil-works/pi-ai") ?? []) {
+			const candidate = join(nodeModulesDir, "@earendil-works", "pi-ai", "dist", "api", "openai-codex-responses.js");
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+		}
+	} catch {
+		// Ignore invalid or unavailable runtime entrypoints.
+	}
+	return undefined;
+}
+
 function resolveOriginalCodexModulePath(): { path: string; dir: string } {
 	// Under pi's extension loader, `@earendil-works/pi-ai` may resolve to dist/compat.js
 	// and package subpath resolve for `/api/*` can fail. Prefer locating the physical
@@ -222,6 +238,16 @@ function resolveOriginalCodexModulePath(): { path: string; dir: string } {
 		candidates.push(join(distDir, "openai-codex-responses.js"));
 	} catch {
 		// ignore
+	}
+
+	// pi 0.84.3's bundled Node CLI exposes pi-ai as a virtual module to
+	// extensions. Resolve its physical nested dependency from the CLI entry so
+	// the source-patching transport can still read the installed implementation.
+	if (process.argv[1]) {
+		const bundledHostModule = resolveCodexModuleFromNodeEntry(process.argv[1]);
+		if (bundledHostModule) {
+			candidates.push(bundledHostModule);
+		}
 	}
 
 	for (const path of candidates) {
