@@ -86,6 +86,12 @@ export class ProactiveCompactionController {
 			this.pending = undefined;
 		});
 
+		pi.on("session_before_compact", () => {
+			// Compaction summaries use the same provider stream. Clear the synthetic
+			// overflow before pi invokes the summarizer so it cannot abort compaction.
+			this.pending = undefined;
+		});
+
 		pi.on("session_compact", () => {
 			this.pending = undefined;
 		});

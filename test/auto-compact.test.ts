@@ -132,6 +132,14 @@ describe("proactive compaction controller", () => {
 		expect(wrapped(model, { messages: [] })).toBe(baseResult);
 	});
 
+	it("does not inject the pending overflow into compaction summarization", async () => {
+		const { ctx, handlers, model, wrapped, baseResult } = setup();
+		await handlers.get("turn_end")?.({ message: assistantMessage(THRESHOLD + 1), toolResults: [{}] }, ctx);
+
+		await handlers.get("session_before_compact")?.({}, ctx);
+		expect(wrapped(model, { messages: [] })).toBe(baseResult);
+	});
+
 	it("reloads settings before scheduling", async () => {
 		const { ctx, handlers, model, wrapped, baseResult, settingsPath } = setup();
 		writeFileSync(
