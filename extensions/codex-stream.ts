@@ -10,6 +10,12 @@
  * The patched module is derived at runtime from the installed
  * @earendil-works/pi-ai openai-codex-responses implementation so we track
  * upstream protocol fixes without vendoring 1200+ lines.
+ *
+ * That implementation is looked up in this order: the PI_CLIPROXYAPI_PI_AI_MODULE
+ * override, the host's own copy resolved from its CLI entry, pi's extension-loader
+ * resolution, and finally the pi-ai this package depends on. The last step is what
+ * keeps compiled single-binary hosts working, where pi-ai exists only inside the
+ * executable and no copy is readable from disk.
  */
 
 import { createHash } from "node:crypto";
@@ -203,11 +209,30 @@ export function patchCodexSource(source: string, providerIds: string[]): string 
 	return src;
 }
 
+const CODEX_MODULE_SUBPATH = join("dist", "api", "openai-codex-responses.js");
+
+/**
+ * Absolute path to a pi-ai `openai-codex-responses.js`, or to a pi-ai package
+ * root. The escape hatch for hosts whose layout we cannot introspect.
+ */
+export const PI_AI_MODULE_ENV = "PI_CLIPROXYAPI_PI_AI_MODULE";
+
+export function resolveCodexModuleFromOverride(value: string | undefined): string | undefined {
+	const raw = value?.trim();
+	if (!raw) {
+		return undefined;
+	}
+	const candidates = raw.endsWith(".js")
+		? [raw]
+		: [join(raw, CODEX_MODULE_SUBPATH), join(raw, "api", "openai-codex-responses.js")];
+	return candidates.find((candidate) => existsSync(candidate));
+}
+
 export function resolveCodexModuleFromNodeEntry(entryPath: string): string | undefined {
 	try {
 		const require = createRequire(pathToFileURL(realpathSync(entryPath)));
 		for (const nodeModulesDir of require.resolve.paths("@earendil-works/pi-ai") ?? []) {
-			const candidate = join(nodeModulesDir, "@earendil-works", "pi-ai", "dist", "api", "openai-codex-responses.js");
+			const candidate = join(nodeModulesDir, "@earendil-works", "pi-ai", CODEX_MODULE_SUBPATH);
 			if (existsSync(candidate)) {
 				return candidate;
 			}
@@ -218,12 +243,39 @@ export function resolveCodexModuleFromNodeEntry(entryPath: string): string | und
 	return undefined;
 }
 
+/**
+ * Compiled single-binary hosts (`bun build --compile`) embed pi-ai in the
+ * executable: `process.argv[1]` is a virtual path such as `B:/~BUN/root/pi.exe`,
+ * every `require.resolve.paths` entry lives under that virtual root, and the
+ * `/api/*` subpath does not resolve at all. Nothing readable exists on disk, so
+ * the package depends on pi-ai itself and patches the copy installed alongside
+ * this extension. Tried last, so a host-owned copy always wins.
+ */
+export function resolveVendoredCodexModule(): string | undefined {
+	return resolveCodexModuleFromNodeEntry(fileURLToPath(import.meta.url));
+}
+
 function resolveOriginalCodexModulePath(): { path: string; dir: string } {
+	const candidates: string[] = [];
+
+	const override = resolveCodexModuleFromOverride(process.env[PI_AI_MODULE_ENV]);
+	if (override) {
+		candidates.push(override);
+	}
+
+	// pi's bundled Node CLI exposes pi-ai as a virtual module to extensions.
+	// Resolve its physical nested dependency from the CLI entry so the
+	// source-patching transport reads the implementation the host actually runs.
+	if (process.argv[1]) {
+		const bundledHostModule = resolveCodexModuleFromNodeEntry(process.argv[1]);
+		if (bundledHostModule) {
+			candidates.push(bundledHostModule);
+		}
+	}
+
 	// Under pi's extension loader, `@earendil-works/pi-ai` may resolve to dist/compat.js
 	// and package subpath resolve for `/api/*` can fail. Prefer locating the physical
 	// dist file next to the resolved package entry.
-	const candidates: string[] = [];
-
 	try {
 		const subpath = import.meta.resolve("@earendil-works/pi-ai/api/openai-codex-responses");
 		candidates.push(fileURLToPath(subpath));
@@ -240,14 +292,9 @@ function resolveOriginalCodexModulePath(): { path: string; dir: string } {
 		// ignore
 	}
 
-	// pi 0.84.3's bundled Node CLI exposes pi-ai as a virtual module to
-	// extensions. Resolve its physical nested dependency from the CLI entry so
-	// the source-patching transport can still read the installed implementation.
-	if (process.argv[1]) {
-		const bundledHostModule = resolveCodexModuleFromNodeEntry(process.argv[1]);
-		if (bundledHostModule) {
-			candidates.push(bundledHostModule);
-		}
+	const vendored = resolveVendoredCodexModule();
+	if (vendored) {
+		candidates.push(vendored);
 	}
 
 	for (const path of candidates) {

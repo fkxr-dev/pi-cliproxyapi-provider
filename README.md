@@ -119,6 +119,30 @@ Resolution order for connection settings:
 
 The Fast preference resolves separately as `CLIPROXYAPI_FAST` → `cliproxyapi.json` → `false`.
 
+### Patched codex protocol source
+
+The provider does not vendor the codex protocol. At startup it reads
+`@earendil-works/pi-ai`'s `dist/api/openai-codex-responses.js`, source-patches it, and
+imports the result, so it tracks upstream protocol fixes instead of pinning a copy.
+
+That source is looked up in this order:
+
+1. `PI_CLIPROXYAPI_PI_AI_MODULE` — a path to `openai-codex-responses.js`, or to a pi-ai
+   package root or `dist` directory
+2. The host's own pi-ai, resolved from its CLI entry (`process.argv[1]`)
+3. pi's extension-loader resolution of `@earendil-works/pi-ai`
+4. The pi-ai this package depends on, installed alongside the extension
+
+Steps 2 and 3 keep the patch aligned with the pi-ai the host actually runs, so they are
+tried first. Step 4 exists for **compiled single-binary hosts** (`bun build --compile`),
+where pi-ai is embedded in the executable: `process.argv[1]` is a virtual path such as
+`B:/~BUN/root/pi.exe`, the `/api/*` subpath does not resolve, and no copy is readable
+from disk. Without it the provider fails to register with
+`failed to load patched codex protocol: Cannot resolve openai-codex-responses.js`.
+
+Set `PI_CLIPROXYAPI_PI_AI_MODULE` if a host keeps pi-ai somewhere none of the automatic
+steps find.
+
 ### baseUrl normalization
 
 Preferred form is **host:port only**:
