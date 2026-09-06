@@ -634,6 +634,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			shouldUseFast: (model) => model.provider === identity.providerId && fastMode.isEffectiveFor(model.id),
 		});
 		streamSimple = proactiveCompaction.wrapStreamSimple(streams.streamSimple);
+		pi.on("session_shutdown", (_event, ctx) => {
+			// The patched module owns a separate cache; leave other sessions' sockets open.
+			streams.closeWebSocketSessions(ctx.sessionManager.getSessionId());
+		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logWarn(`failed to load patched codex protocol: ${message}`);
