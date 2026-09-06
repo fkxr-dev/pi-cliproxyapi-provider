@@ -1,9 +1,12 @@
+import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { CLIPROXYAPI_CODEX_API, loadCliproxyCodexStreams } from "../extensions/codex-stream.ts";
 import providerExtension from "../extensions/index.ts";
 import { AUTH_FILE_NAME } from "../extensions/lib.ts";
 
@@ -77,6 +80,74 @@ function createPiMock(commands: Map<string, Parameters<ExtensionAPI["registerCom
 }
 
 describe("pi 0.82.0 compatibility", () => {
+	it("closes only the shutting-down session's cached WebSocket", async () => {
+		await withTempAgentDir(async () => {
+			const { WebSocketServer } = createRequire(import.meta.url)("ws");
+			const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+			const sockets: Array<{ readyState: number; terminate: () => void }> = [];
+			server.on("connection", (socket: any) => {
+				sockets.push(socket);
+				socket.on("message", () => {
+					socket.send(
+						JSON.stringify({
+							type: "response.completed",
+							response: { id: "test-response", status: "completed", output: [] },
+						}),
+					);
+				});
+			});
+			await once(server, "listening");
+			const streams = await loadCliproxyCodexStreams(["cliproxyapi", "cliproxyapi"]);
+			const sessionIds = ["shutdown-session", "owned-subagent-session"];
+			const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected HTTP request"));
+			try {
+				const { pi, handlers } = createPiMock(new Map());
+				await providerExtension(pi);
+				const model = {
+					id: "test-model",
+					name: "Test model",
+					api: CLIPROXYAPI_CODEX_API,
+					provider: "cliproxyapi",
+					baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 10000,
+					maxTokens: 1000,
+				} as Model<Api>;
+				for (const sessionId of sessionIds) {
+					const result = await streams
+						.streamSimple(
+							model,
+							{ messages: [] },
+							{
+								apiKey: "test-key",
+								sessionId,
+								transport: "websocket",
+							},
+						)
+						.result();
+					expect(result.stopReason, result.errorMessage).toBe("stop");
+				}
+				expect(sockets.map((socket) => socket.readyState)).toEqual([1, 1]);
+				const ctx = {
+					sessionManager: { getSessionId: () => sessionIds[0] },
+				} as unknown as ExtensionContext;
+				for (const handler of handlers.get("session_shutdown") ?? []) {
+					await handler({ type: "session_shutdown", reason: "quit" }, ctx);
+				}
+				await vi.waitFor(() => expect(sockets[0].readyState).toBe(3));
+				expect(sockets[1].readyState).toBe(1);
+				expect(fetchMock).not.toHaveBeenCalled();
+			} finally {
+				for (const sessionId of sessionIds) streams.closeWebSocketSessions(sessionId);
+				for (const socket of sockets) socket.terminate();
+				await new Promise<void>((resolve) => server.close(resolve));
+				fetchMock.mockRestore();
+			}
+		});
+	});
+
 	it("registers oauth login and /fast without a dedicated /cliproxyapi command", async () => {
 		await withTempAgentDir(async () => {
 			const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
