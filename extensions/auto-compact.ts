@@ -1,4 +1,10 @@
-import { type Api, type AssistantMessage, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	type Model,
+	type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { type ExtensionAPI, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { CliproxyCodexStreamSimple } from "./codex-stream.ts";
 
@@ -139,12 +145,22 @@ export class ProactiveCompactionController {
 		return (model, context, options) => {
 			const pending = this.pending;
 			if (!pending || pending.modelKey !== this.modelKey(model)) {
-				return streamSimple(model, context, options);
+				return streamSimple(model, context, this.withConfiguredTransport(options));
 			}
 
 			this.pending = undefined;
 			return createProactiveCompactionStream(model, pending.contextTokens, pending.threshold);
 		};
+	}
+
+	// Compaction and branch summaries build their own stream options without a transport,
+	// so they would fall back to "auto" and open a WebSocket even when the session is
+	// configured for SSE. Apply the session setting whenever the caller left it unset.
+	private withConfiguredTransport(options: SimpleStreamOptions | undefined): SimpleStreamOptions | undefined {
+		if (options?.transport !== undefined || !this.settingsManager) {
+			return options;
+		}
+		return { ...options, transport: this.settingsManager.getTransport() };
 	}
 
 	private modelKey(model: Pick<Model<Api>, "provider" | "id">): string {

@@ -91,7 +91,10 @@ describe("proactive compaction controller", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "pi-cliproxyapi-auto-compact-cwd-"));
 		tempDirs.push(agentDir, cwd);
 		const settingsPath = join(agentDir, "settings.json");
-		writeFileSync(settingsPath, `${JSON.stringify({ compaction: { enabled, reserveTokens: RESERVE_TOKENS } })}\n`);
+		writeFileSync(
+			settingsPath,
+			`${JSON.stringify({ transport: "sse", compaction: { enabled, reserveTokens: RESERVE_TOKENS } })}\n`,
+		);
 
 		const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
 		const pi = {
@@ -115,9 +118,13 @@ describe("proactive compaction controller", () => {
 		handlers.get("session_start")?.({}, ctx);
 
 		const baseResult = {} as ReturnType<CliproxyCodexStreamSimple>;
-		const baseStream: CliproxyCodexStreamSimple = () => baseResult;
+		const calls: Array<Parameters<CliproxyCodexStreamSimple>[2]> = [];
+		const baseStream: CliproxyCodexStreamSimple = (_model, _context, options) => {
+			calls.push(options);
+			return baseResult;
+		};
 		const wrapped = controller.wrapStreamSimple(baseStream);
-		return { ctx, handlers, model, wrapped, baseResult, settingsPath };
+		return { ctx, handlers, model, wrapped, baseResult, settingsPath, calls };
 	}
 
 	it("injects one overflow before the next provider request", async () => {
@@ -149,6 +156,17 @@ describe("proactive compaction controller", () => {
 
 		await handlers.get("turn_end")?.({ message: assistantMessage(THRESHOLD + 1), toolResults: [{}] }, ctx);
 		expect(wrapped(model, { messages: [] })).toBe(baseResult);
+	});
+
+	it("applies the configured transport to requests that leave it unset", () => {
+		const { model, wrapped, calls } = setup();
+
+		wrapped(model, { messages: [] });
+		wrapped(model, { messages: [] }, { maxTokens: 10 });
+		wrapped(model, { messages: [] }, { transport: "websocket" });
+
+		expect(calls.map((options) => options?.transport)).toEqual(["sse", "sse", "websocket"]);
+		expect(calls[1]?.maxTokens).toBe(10);
 	});
 
 	it("ignores other providers", async () => {
